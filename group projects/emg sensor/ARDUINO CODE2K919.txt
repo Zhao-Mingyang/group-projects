@@ -1,0 +1,71 @@
+#include <Servo.h>         // Include the Servo library
+#include "Volume.h"        // Include the Volume library        
+Servo servo_test;
+Volume vol;
+const int analogPin = A3;  //The pin which is used as an input of the Analog value
+const int ledCount = 10;  //The number of LEDs in the bar graph
+const int led = 6;        //Pin used for dimming LED
+int ledPins[] = { 2, 3, 4, 7, 8, 9, 10, 11, 12, 13 };
+
+void setup() 
+{
+  Serial.begin(9600);
+  for(int thisLed = 0; thisLed < ledCount; thisLed++) 
+  {
+    pinMode(ledPins[thisLed], OUTPUT);
+  }
+  vol.begin();
+
+pinMode(A3, INPUT);
+servo_test.attach(28);
+}
+
+void loop() {
+  //LED bar
+  int x = analogRead(analogPin);  //Reads the analog value on the pin
+  int ledLevel = map(x, 0, 1023, 0, ledCount);  //map the result to a range from 0 to the number of LEDs
+  //Serial.println(x);
+  for(int thisLed = 0; thisLed < ledCount; thisLed++)
+  {
+    if(thisLed<ledLevel)
+    {
+      digitalWrite(ledPins[thisLed], HIGH); //if the array element's index is less than ledLevel we turn on the pin for this element
+    }
+    else
+    {
+      digitalWrite(ledPins[thisLed], LOW);  //if the array element's index is more than ledLevel we turn it off
+    }
+  } 
+  
+  //dimmer led
+  int PWMValue = map(x, 0, 1023, 0, 255);
+  analogWrite(led, PWMValue);
+  //Serial.println(PWMValue);
+  
+  //motor
+  /*int angle = servo_test.read();
+  int rotateAngle = map(x, 0, 1023, 0, 180);
+  if(angle < rotateAngle){
+    while(angle <= rotateAngle){
+      servo_test.write(angle);
+      angle += 5;
+      delay(10);
+    }
+  }
+  else if(angle > rotateAngle){
+      while(angle > rotateAngle){
+      servo_test.write(angle);
+      angle -= 5;
+      delay(10);
+    }
+  }
+  */
+ 
+  // audio
+  /*byte speakerV = map(x, 0, 1023, 0, 255);
+  //tone(2, speakerV, 20); //tone(x,y,z) where x is the speaker output pin, y is the value and z is the duration
+  vol.tone(440,speakerV);
+  //Serial.println(x);
+  */
+  delay(100);
+}

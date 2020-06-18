@@ -1,0 +1,217 @@
+/*
+ * The template sets up all the important peripherals on the MSP432 for you.  This includes setting up the 48 MHz
+ * high-frequency crystal (HFXT), the master clock MCLK to run at 48 MHz, the internal core voltage for 48 MHz
+ * operation, the ADC reference voltages and outputting them to P5.6 and P5.7.
+ * However, you need to set up the ADC yourself.
+ *
+ * Most importantly, the template sets up the timer SysTick to count 960 clock cycles.  Every time 960 clock cycles
+ * or periods have passed, SysTick will generate an interrupt and the interrupt service routine SysTick_Handler will be called.
+ * Since the master clock is 48 MHz, SysTick_Handler will be called 50,000 times a second (48 MHz / 960 = 50,000) or 50 kHz.
+ * Any commands or functions inside SysTick_Handler will therefore be executed at 50 kHz which can be used as
+ * your sampling frequency.
+ *
+ * The descrambling and filtering functions should be implemented inside the SysTick_Handler as these are
+ * related to and run at the sampling frequency, i.e. 50 kHz.
+ *
+ * Anything else that only needs to be run once but not repeatedly should be implemented inside the function main{}.
+ *
+ * You need to make your codes as efficient as possible.  Any codes you put in SysTick_Handler must be completed
+ * before the next interrupt is generated.  To see how long it will take to perform all the functions inside SysTick_Handler,
+ * in this template, P6.0 is set to high at the start of SysTick_Handler.  At the end of SysTick_Handler, P6.0 is set to low.
+ * You can therefore use an oscilloscope to measure the output at P6.0 to see how long it takes the SysTick_Handler to
+ * complete all the codes there.
+ *
+ * You should save the whole template folder in the workspace folder of the Code Composer Studio (CCS).  Then within CCS,
+ * "import" this project.
+
+ * Author: Dr Chin-Pang Liu, University College London, 2018
+ *****************************************************************************
+*/
+
+/* DriverLib Includes */
+#include <ti/devices/msp432p4xx/driverlib/driverlib.h>
+
+/* Standard Includes */
+#include <stdint.h>
+
+#include <stdbool.h>
+
+#include <math.h>
+
+#define PTS 6 // because 50kHz divided by 7kHz // number of points in one cycle of a sine wave
+#define PI 3.14159
+volatile int sin_value[7];
+float input[5]; // array to store current and previous inputs of filter
+float output[5]; // array to store current and previous outputs of filter
+float a[5]; // input coefficients of filter
+float b[5]; // output coefficients of filter
+
+int main(void)
+{
+    /* Halting the Watchdog */
+    MAP_WDT_A_holdTimer();
+    
+    int t;
+
+    for( t = 0; t < PTS; t = t + 1)
+    {
+        sin_value[t] = 255*(sin(2*PI*(t/(float)PTS))+1)/2;
+    }
+    // This is a lookup table for sin values
+    
+    for( t = 0; t < 5; t = t + 1)
+    {
+        input[t] = 0;
+        output[t] = 0;
+    }
+    // Initializing these two arrays
+    
+    a[0] = 0.88735;
+    a[1] = -1.91699;
+    a[2] = 2.81005;
+    a[3] = a[1];
+    a[4] = a[0];
+    
+    b[0] = 1;
+    b[1] = -2.03179;
+    b[2] = 2.79732;
+    b[3] = -1.80219;
+    b[4] = 0.78744;
+    
+    // all coefficients set
+
+    /* Configure P5.6 and P5.7 to their analog functions to output VREF */
+        P5SEL0 |= BIT6 | BIT7;
+        P5SEL1 |= BIT6 | BIT7;
+
+
+        REFCTL0 |= REFON;                     // Turn on reference module
+        REFCTL0 |= REFOUT;                    // Output reference voltage to a pin
+
+     /* Output VREF = 1.2V */
+        REFCTL0 &= ~(REFVSEL_3);              // Clear existing VREF voltage level setting
+        REFCTL0 |= REFVSEL_0;                 // Set VREF = 1.2V
+        while (REFCTL0 & REFGENBUSY);       // Wait until the reference generation is settled
+
+
+    /* Configuring pins for HFXT crystal */
+    MAP_GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_PJ,
+            GPIO_PIN2 | GPIO_PIN3, GPIO_PRIMARY_MODULE_FUNCTION);
+
+    /* Set P6.0 as output */
+    MAP_GPIO_setAsOutputPin(GPIO_PORT_P6, GPIO_PIN0);
+
+    /* Set all 8 pins of P2 as output */
+    MAP_GPIO_setAsOutputPin(GPIO_PORT_P2, GPIO_PIN0 | GPIO_PIN1 | GPIO_PIN2 | GPIO_PIN3 | GPIO_PIN4 | GPIO_PIN5 | GPIO_PIN6 | GPIO_PIN7);
+
+
+    /* Configuring GPIOs (4.3 MCLK) */
+       MAP_GPIO_setAsPeripheralModuleFunctionOutputPin(GPIO_PORT_P4, GPIO_PIN3,
+       GPIO_PRIMARY_MODULE_FUNCTION);
+
+    /* Setting the external clock frequency. This API is optional, but will
+     * come in handy if the user ever wants to use the getMCLK/getACLK/etc
+     * functions
+     */
+    CS_setExternalClockSourceFrequency(32000,48000000);
+
+    /* Starting HFXT in non-bypass mode without a timeout. Before we start
+     * we have to change VCORE to 1 to support the 48MHz frequency */
+    MAP_PCM_setCoreVoltageLevel(PCM_VCORE1);
+    MAP_FlashCtl_setWaitState(FLASH_BANK0, 2);
+    MAP_FlashCtl_setWaitState(FLASH_BANK1, 2);
+    CS_startHFXT(false);
+
+    /* Initializing MCLK to HFXT (effectively 48MHz) */
+    MAP_CS_initClockSignal(CS_MCLK, CS_HFXTCLK_SELECT, CS_CLOCK_DIVIDER_1);
+
+       /* Configuring SysTick to trigger at 50kHz (MCLK is 48MHz so this will
+     * make it toggle every 0.5s) */
+    MAP_SysTick_enableModule();
+    MAP_SysTick_setPeriod(960);
+    MAP_Interrupt_enableSleepOnIsrExit();
+    MAP_SysTick_enableInterrupt();
+
+    /* Initializing ADC (MCLK/1//1) */
+    MAP_ADC14_enableModule();
+    MAP_ADC14_initModule(ADC_CLOCKSOURCE_MCLK, ADC_PREDIVIDER_1, ADC_DIVIDER_1,
+    0);
+
+    /* Configuring GPIOs (P5.0 (A5) as the ADC input pin) */
+    MAP_GPIO_setAsPeripheralModuleFunctionInputPin(GPIO_PORT_P5, GPIO_PIN0,
+    GPIO_TERTIARY_MODULE_FUNCTION);
+
+    /* Configure ADC Resolution */
+    ADC14_setResolution(ADC_10BIT);
+
+
+    /* Configuring ADC Memory */
+    MAP_ADC14_configureSingleSampleMode(ADC_MEM0, true);
+    MAP_ADC14_configureConversionMemory(ADC_MEM0, ADC_VREFPOS_INTBUF_VREFNEG_VSS,
+    ADC_INPUT_A5, false);
+
+
+    /* Configuring Sample Timer */
+    MAP_ADC14_enableSampleTimer(ADC_MANUAL_ITERATION);
+
+
+     /* Enabling MASTER interrupts */
+    MAP_Interrupt_enableMaster();
+
+    while (1)
+    {
+        //MAP_PCM_gotoLPM0();
+    }
+}
+
+void SysTick_Handler(void)
+{
+    P6OUT |= BIT0; // set P6 PIN0 High
+
+    static long temp_ADC = 0;
+    
+    static int j = 0;
+    
+    input[4] = input[3];
+    input[3] = input[2];
+    input[2] = input[1];
+    input[1] = input[0];
+    
+    output[4] = output[3];
+    output[3] = output[2];
+    output[2] = output[1];
+    output[1] = output[0];
+
+    input[0] = ADC14_getResult(ADC_MEM0)/4;  //Get the conversion result.
+    
+    output[0] = (a[0]*input[0])+(a[1]*input[1])+(a[2]*input[2])+(a[3]*input[3])+(a[4]*input[4])-(b[1]*output[1])-(b[2]*output[2])-(b[3]*output[3])-(b[4]*output[4]);
+    
+    // This is the implementation of the 8kHz bandstop filter
+    
+    P2OUT = output[0]*sin_value[j];  // This is where the signal is multiplied with the 7kHz sin wave
+    // and then the value is written to the 8 output pins of port 2
+    j++;
+        if (j > PTS)
+        {j = 0;}
+
+    /* Enabling/Toggling Conversion */
+    MAP_ADC14_enableConversion();
+    MAP_ADC14_toggleConversionTrigger();
+    MAP_ADC14_toggleConversionTrigger();
+
+
+    P6OUT &= ~BIT0; // set P6 PIN0 Low
+}
+
+
+/* ADC Interrupt Handler. This handler is called whenever there is a conversion
+* that is finished for ADC_MEM0.
+*/
+void ADC14_IRQHandler(void)
+{
+
+    uint64_t status = MAP_ADC14_getEnabledInterruptStatus();
+    MAP_ADC14_clearInterruptFlag(status);
+
+}
+
